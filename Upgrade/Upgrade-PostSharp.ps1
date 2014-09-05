@@ -1,5 +1,5 @@
 param(
-    $solutionRootPath = $null,
+    $path = $null,
     $nugetVersion = $null,
     $outputProjectFileNameSuffix = '',
     $backup = $true
@@ -24,13 +24,13 @@ function Get-PostSharpReference($csproj)
     return @($csproj.Xml.ItemGroups.Children | Where-Object { $_.ItemType -like 'Reference' -and $_.Include.ToLowerInvariant().StartsWith("postsharp") })
 }
 
-function Get-RepositoryPath($solutionRootPath)
+function Get-RepositoryPath($path)
 {
     $repositoryPath = .\NuGet.exe config repositorypath
     if ($repositoryPath -like 'WARNING*')
     {
         Write-Warning 'repositorypath nuget setting is not set, using solution path as root for repository path'
-        $repositoryPath = Join-Path $solutionRootPath 'packages'
+        $repositoryPath = Join-Path $path 'packages'
     }
 
     Write-Host "Using $repositorypath as repositorypath"
@@ -76,6 +76,14 @@ function Upgrade-Project
         return
     }
 
+    $toolkitReference = $postSharpReferences | Where-Object { $_.Include -like 'postsharp.toolkit*' }
+    if ($toolkitReference -and $toolkitReference.lenght -ne 0)
+    {
+        Write-Warning "Project $projectFullName contains unsupported toolkit reference(s):"
+        $toolkitReference | ForEach-Object { Write-Warning $_.Include }
+        return
+    }
+
     $referenceGroup = $postSharpReferences[0].Parent
 
     $projectPath = Split-Path $projectFullName
@@ -91,10 +99,8 @@ function Upgrade-Project
     $nodesToRemove += $csproj.Xml.Targets | Where-Object {$_.Name.ToLowerInvariant() -eq "ensurepostsharpimported" }
     $nodesToRemove += $postSharpReferences
 
-    if ($nodesToRemove -and $nodesToRemove.length)
-    {
-        $nodesToRemove | ForEach-Object { $_.Parent.RemoveChild($_) | out-null }
-    }
+    $postSharpReferences | ForEach-Object { Write-Host "Removing reference" $_.Include }
+    $nodesToRemove | ForEach-Object { $_.Parent.RemoveChild($_) | out-null }
 
     # Set property DontImportPostSharp to prevent locally-installed previous versions of PostSharp to interfere.
     $csproj.Xml.AddProperty( "DontImportPostSharp", "True" ) | Out-Null
@@ -136,25 +142,27 @@ function Upgrade-Project
     # backup original file
     if ($backup)
     {
-        Copy-Item $projectFullName ($projectFullName + ".backup")
+        Copy-Item $projectFullName ($projectFullName + ".bak")
     }
 
     # save the project file
     $csproj.Save($outputProjectFullName)
+
+    Write-Host ''
 }
 
-function Upgrade-Solution
+
+function Upgrade-Directory
 {
     param(
-        $solutionRootPath,
-        $nugetVersion,
+        $rootPath = $null,
+        $nugetVersion = $null,
         $outputProjectFileNameSuffix = '',
         $backup = $true
     )
-
     try
     {
-        $repositoryPath = Get-RepositoryPath $solutionRootPath
+        $repositoryPath = Get-RepositoryPath $rootPath
         $nugetPackage = 'PostSharp.' + $nugetVersion
     
         .\NuGet.exe install 'PostSharp' -Version $nugetVersion -OutputDirectory $repositoryPath
@@ -164,22 +172,26 @@ function Upgrade-Solution
         Write-Host ''
         Write-Host 'Updating projects'
 
-        Get-ChildItem $solutionRootPath -Recurse |
-            Where-Object { $_.Name -like '*.csproj' } |
+        Get-ChildItem $rootPath -Recurse |
+            Where-Object { ($_.Name -like '*.csproj') -or ($_.Name -like '*.vbproj') } |
             ForEach-Object { Upgrade-Project -projectFullName $_.FullName -packagePath $postSharpNugetPath -outputProjectFullName ($_.FullName + $outputProjectFileNameSuffix) -backup $backup }
     }
     catch [Exception]
     {
-        Write-Error $_.Message
-        Write-Error 'Unhandled exception thrown. Terminating batch upgrade.'
+        Write-Warning 'Unhandled exception thrown. Terminating batch upgrade.'
+        throw
     }
 }
 
-#Upgrade-Project 'C:\src\upgrade\test\projects\Core\PostSharp.CommandLine.Cil\PostSharp.CommandLine.Cil-x64-4.0.csproj' 'C:\src\upgrade\test\projects\Core\PostSharp.CommandLine.Cil\PostSharp.CommandLine.Cil-x64-4.0.csproj.new' 'c:\src\upgrade\test\projects\packages\PostSharp.3.2.27-beta\'
-
-#Upgrade-Solution -solutionRootPath 'C:\src\upgrade\test\projects' -nugetVersion '3.2.27-beta' -outputProjectFileNameSuffix '.new' -backup $false
-
-if ($solutionRootPath -and $nugetVersion)
+if (!(Test-Path .\NuGet.exe))
 {
-    Upgrade-Solution -solutionRootPath $solutionRootPath -nugetVersion $nugetVersion -outputProjectFileNameSuffix $outputProjectFileNameSuffix -backup $backup
+    Write-Error "NuGet.exe file not found. Run the script from directory that contains Nuget.exe"
+    return
 }
+
+if ($path -and $nugetVersion)
+{
+    Upgrade-Directory -path $path -nugetVersion $nugetVersion -outputProjectFileNameSuffix $outputProjectFileNameSuffix -backup $backup
+}
+
+Upgrade-Directory -rootPath 'C:\src\upgrade\projects' -nugetVersion '3.2.27-beta' -outputProjectFileNameSuffix '.new' -backup $false
