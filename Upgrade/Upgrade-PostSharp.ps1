@@ -1,9 +1,36 @@
+<#
+.Synopsis
+    Batch PostSharp upgrade.
+
+.Description
+    This script upgrades PostSharp to version specified by -postSharpVersion parameter in all
+    projects (csproj, vbproj) recursively found in directory specified by -path parameter.
+    Supported are projects referencing PostSharp 2.x, 3.x and 4.x. Projects without PostSharp are
+    not processed.
+
+    Script requires at least PowerShell 3 and Microsoft.Build v4.0. Script can run on machine
+    without Visual Studio.
+
+    Limitations:
+        - Only .NET Framework targets are supported.
+        - Projects referencing PostSharp toolkits are skipped.
+        - Script must be run from directory with nuget.exe.
+#>
+
+
+
 param(
-    $path = $null,
-    $nugetVersion = $null,
-    $outputProjectFileNameSuffix = '',
-    $backup = $true
+    [string]$path = $null,
+    [string]$postSharpVersion = $null,
+    [string]$outputProjectFileNameSuffix = '',
+    [bool]$backup = $true
 )
+
+if (!(Test-Path .\NuGet.exe))
+{
+    Write-Error "NuGet.exe file not found. Run the script from directory that contains Nuget.exe"
+    return
+}
 
 Add-Type -AssemblyName 'Microsoft.Build, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'
 
@@ -151,21 +178,20 @@ function Upgrade-Project
     Write-Host ''
 }
 
-
 function Upgrade-Directory
 {
     param(
         $rootPath = $null,
-        $nugetVersion = $null,
+        $postSharpVersion = $null,
         $outputProjectFileNameSuffix = '',
         $backup = $true
     )
     try
     {
         $repositoryPath = Get-RepositoryPath $rootPath
-        $nugetPackage = 'PostSharp.' + $nugetVersion
+        $nugetPackage = 'PostSharp.' + $postSharpVersion
     
-        .\NuGet.exe install 'PostSharp' -Version $nugetVersion -OutputDirectory $repositoryPath
+        .\NuGet.exe install 'PostSharp' -Version $postSharpVersion -OutputDirectory $repositoryPath
     
         $postSharpNugetPath = Join-Path $repositoryPath $nugetPackage
 
@@ -183,15 +209,11 @@ function Upgrade-Directory
     }
 }
 
-if (!(Test-Path .\NuGet.exe))
+if ($path -and $postSharpVersion)
 {
-    Write-Error "NuGet.exe file not found. Run the script from directory that contains Nuget.exe"
-    return
+    Upgrade-Directory -path $path -nugetVersion $postSharpVersion -outputProjectFileNameSuffix $outputProjectFileNameSuffix -backup $backup
 }
-
-if ($path -and $nugetVersion)
+else
 {
-    Upgrade-Directory -path $path -nugetVersion $nugetVersion -outputProjectFileNameSuffix $outputProjectFileNameSuffix -backup $backup
+    Write-Host '-path and -postSharpVersion are mandatory parameters. Please, specify them in order to start the batch upgrade.'
 }
-
-Upgrade-Directory -rootPath 'C:\src\upgrade\projects' -nugetVersion '3.2.27-beta' -outputProjectFileNameSuffix '.new' -backup $false
