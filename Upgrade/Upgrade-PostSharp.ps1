@@ -153,7 +153,8 @@ function Upgrade-Project
     $csproj.Xml.AddProperty( "DontImportPostSharp", "True" ) | Out-Null
 
     # Add import to PostSharp.targets
-    $import = $csproj.Xml.AddImport($relativePostSharpTargetsPath)
+    $importGroup = $csproj.Xml.AddImportGroup() # make sure that PostSharp.targets is imported as a last
+    $import = $importGroup.AddImport($relativePostSharpTargetsPath)
     $import.set_Condition( "Exists('$relativePostSharpTargetsPath')" ) | Out-Null
 
      # Add a target to fail the build when our targets are not imported
