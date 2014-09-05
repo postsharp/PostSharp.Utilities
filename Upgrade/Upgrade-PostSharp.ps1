@@ -23,7 +23,7 @@ param(
     [string]$path = $null,
     [string]$postSharpVersion = $null,
     [string]$outputProjectFileNameSuffix = '',
-    [bool]$backup = $true
+    [bool]$backup = $false
 )
 
 if (!(Test-Path .\NuGet.exe))
@@ -68,10 +68,11 @@ function Get-RepositoryPath($path)
 function Upgrade-Project
 {
     param(
-        $projectFullName,
-        $packagePath,
-        $outputProjectFullName = $null,
-        $backup = $true
+        [string]$projectFullName,
+        [string]$packagePath,
+        [string]$outputProjectFullName = $null,
+        [bool]$backup = $false,
+        [string]$version
     )
 
     Write-Host "Processing $projectFullName"
@@ -91,7 +92,6 @@ function Upgrade-Project
     {
         Write-Error $_.Exception.Message
         Write-Warning 'Skipping project'
-        Write-Host ''
         return
     }
 
@@ -100,14 +100,12 @@ function Upgrade-Project
     if (!$targetFrameworkIdentifier)
     {
         Write-Warning "TargetFrameworkIdentifier not defined. Skipping the project."
-        Write-Host ''
         return
     }
 
     if ($targetFrameworkIdentifier.EvaluatedValue -ne '.NETFramework')
     {
         Write-Warning "Project doesn't target .NET Framework. Skipping the project."
-        Write-Host ''
         return
     }
 
@@ -117,7 +115,6 @@ function Upgrade-Project
     if (!$postSharpReferences -or $postSharpReferences.length -eq 0)
     {
         Write-Warning "No PostSharp reference. Skipping the project"
-        Write-Host ''
         return
     }
 
@@ -196,29 +193,70 @@ function Upgrade-Project
     # save the project file
     $csproj.Save($outputProjectFullName)
 
-    Write-Host ''
+    Upgrade-Packages -projectFullName $projectFullName -version $version -outpuSuffix $outputProjectFileNameSuffix
+}
+
+function Upgrade-Packages
+{
+    param(
+        [string]$projectFullName,
+        [string]$version,
+        [string]$outpuSuffix = ''
+    )
+
+    $projectPath = Split-Path $projectFullName
+    $packageFullName = Join-Path $projectPath 'packages.config'
+    $outputFullName = $packageFullName + $outputSuffix
+
+    if (!(Test-Path $packageFullName))
+    {
+        return
+    }
+
+    $xml = [xml](Get-Content $packageFullName)
+
+    $packageElement = $xml.packages.ChildNodes | Where-Object { $_.Name -like 'package' -and $_.id -like 'PostSharp' }[0]
+    if (!$packageElement -and !$pacakgeElement.version)
+    {
+        return
+    }
+
+    Write-Host "Updating current NuGet package version from" $packageElement.version "to $version"
+
+    $packageElement.version = $version
+
+    # backup original file
+    if ($backup)
+    {
+        Copy-Item $packageFullName ($packageFullName + ".bak")
+    }
+
+    $xml.Save($outputFullName)
 }
 
 function Upgrade-Directory
 {
     param(
-        $rootPath = $null,
-        $postSharpVersion = $null,
-        $outputProjectFileNameSuffix = '',
-        $backup = $true
+        [string]$rootPath = $null,
+        [string]$postSharpVersion = $null,
+        [string]$outputProjectFileNameSuffix = '',
+        [bool]$backup = $true
     )
     try
     {
         $repositoryPath = Get-RepositoryPath $rootPath
         $nugetPackage = 'PostSharp.' + $postSharpVersion
-    
+
+        # Install nuget package    
         $nugetOutput = .\NuGet.exe install 'PostSharp' -Version $postSharpVersion -OutputDirectory $repositoryPath
         if (!($nugetOutput -like 'Successfully*') -and !($nugetOutput -like '*already installed.'))
         {
             Write-Warning 'PostSharp NuGet package not installed successfully. Terminating script.'
             return
         }
+        Write-Host $nugetOutput
     
+        # Update projects
         $postSharpNugetPath = Join-Path $repositoryPath $nugetPackage
 
         Write-Host ''
@@ -226,7 +264,10 @@ function Upgrade-Directory
 
         Get-ChildItem $rootPath -Recurse |
             Where-Object { ($_.Name -like '*.csproj') -or ($_.Name -like '*.vbproj') } |
-            ForEach-Object { Upgrade-Project -projectFullName $_.FullName -packagePath $postSharpNugetPath -outputProjectFullName ($_.FullName + $outputProjectFileNameSuffix) -backup $backup }
+            ForEach-Object {
+                Upgrade-Project -projectFullName $_.FullName -packagePath $postSharpNugetPath -outputProjectFullName ($_.FullName + $outputProjectFileNameSuffix) -backup $backup -version $postSharpVersion
+                Write-Host ''
+            }
     }
     catch [Exception]
     {
