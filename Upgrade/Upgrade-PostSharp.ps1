@@ -91,6 +91,23 @@ function Upgrade-Project
     {
         Write-Error $_.Exception.Message
         Write-Warning 'Skipping project'
+        Write-Host ''
+        return
+    }
+
+    # check project target
+    $targetFrameworkIdentifier = $csproj.GetProperty('TargetFrameworkIdentifier')
+    if (!$targetFrameworkIdentifier)
+    {
+        Write-Warning "TargetFrameworkIdentifier not defined. Skipping the project."
+        Write-Host ''
+        return
+    }
+
+    if ($targetFrameworkIdentifier.EvaluatedValue -ne '.NETFramework')
+    {
+        Write-Warning "Project doesn't target .NET Framework. Skipping the project."
+        Write-Host ''
         return
     }
 
@@ -99,15 +116,18 @@ function Upgrade-Project
 
     if (!$postSharpReferences -or $postSharpReferences.length -eq 0)
     {
-        Write-Warning "No PostSharp reference in $projectFullName. Skipping the project"
+        Write-Warning "No PostSharp reference. Skipping the project"
+        Write-Host ''
         return
     }
 
     $toolkitReference = $postSharpReferences | Where-Object { $_.Include -like 'postsharp.toolkit*' }
     if ($toolkitReference -and $toolkitReference.lenght -ne 0)
     {
-        Write-Warning "Project $projectFullName contains unsupported toolkit reference(s):"
+        Write-Warning "Project contains unsupported toolkit reference(s):"
         $toolkitReference | ForEach-Object { Write-Warning $_.Include }
+        Write-Warning "Skipping the project."
+        Write-Host ''
         return
     }
 
