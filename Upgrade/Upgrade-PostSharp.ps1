@@ -191,7 +191,12 @@ function Upgrade-Directory
         $repositoryPath = Get-RepositoryPath $rootPath
         $nugetPackage = 'PostSharp.' + $postSharpVersion
     
-        .\NuGet.exe install 'PostSharp' -Version $postSharpVersion -OutputDirectory $repositoryPath
+        $nugetOutput = .\NuGet.exe install 'PostSharp' -Version $postSharpVersion -OutputDirectory $repositoryPath
+        if (!($nugetOutput -like 'Successfully*') -and !($nugetOutput -like '*already installed.'))
+        {
+            Write-Warning 'PostSharp NuGet package not installed successfully. Terminating script.'
+            return
+        }
     
         $postSharpNugetPath = Join-Path $repositoryPath $nugetPackage
 
@@ -211,7 +216,7 @@ function Upgrade-Directory
 
 if ($path -and $postSharpVersion)
 {
-    Upgrade-Directory -path $path -nugetVersion $postSharpVersion -outputProjectFileNameSuffix $outputProjectFileNameSuffix -backup $backup
+    Upgrade-Directory -rootPath $path -postSharpVersion $postSharpVersion -outputProjectFileNameSuffix $outputProjectFileNameSuffix -backup $backup
 }
 else
 {
