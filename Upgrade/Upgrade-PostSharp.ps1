@@ -97,13 +97,7 @@ function Upgrade-Project
 
     # check project target
     $targetFrameworkIdentifier = $csproj.GetProperty('TargetFrameworkIdentifier')
-    if (!$targetFrameworkIdentifier)
-    {
-        Write-Warning "TargetFrameworkIdentifier not defined. Skipping the project."
-        return
-    }
-
-    if ($targetFrameworkIdentifier.EvaluatedValue -ne '.NETFramework')
+    if ($targetFrameworkIdentifier -and $targetFrameworkIdentifier.EvaluatedValue -ne '.NETFramework')
     {
         Write-Warning "Project doesn't target .NET Framework. Skipping the project."
         return
@@ -208,28 +202,45 @@ function Upgrade-Packages
     $packageFullName = Join-Path $projectPath 'packages.config'
     $outputFullName = $packageFullName + $outputSuffix
 
-    if (!(Test-Path $packageFullName))
+    if (Test-Path $packageFullName)
     {
-        return
+        $xml = [xml](Get-Content $packageFullName)
+
+        # backup original file
+        if ($backup)
+        {
+            Copy-Item $packageFullName ($packageFullName + ".bak")
+        }
+    }
+    else
+    {
+        Write-Host "Creating packages.config"
+        $xml = [xml]"<packages></packages>"
     }
 
-    $xml = [xml](Get-Content $packageFullName)
+    
 
     $packageElement = $xml.packages.ChildNodes | Where-Object { $_.Name -like 'package' -and $_.id -like 'PostSharp' }[0]
-    if (!$packageElement -and !$pacakgeElement.version)
+    if (!$packageElement)
     {
-        return
+        Write-Host "Installing NuGet package version $version"
+        $packageElement = $xml.CreateElement("package")
+        $packageElement.SetAttribute("id", "PostSharp")
+        $packageElement.SetAttribute("version", $version)
+        $packageElement.SetAttribute("targetFramework", "net20")
+        $xml.DocumentElement.AppendChild($packageElement) | Out-Null
+    }
+    else
+    {
+        Write-Host "Updating current NuGet package version from" $packageElement.version "to $version"
+        $packageElement.SetAttribute("version", $version)
     }
 
-    Write-Host "Updating current NuGet package version from" $packageElement.version "to $version"
+    
 
-    $packageElement.version = $version
+    
 
-    # backup original file
-    if ($backup)
-    {
-        Copy-Item $packageFullName ($packageFullName + ".bak")
-    }
+   
 
     $xml.Save($outputFullName)
 }
