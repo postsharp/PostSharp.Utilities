@@ -97,7 +97,9 @@ function Upgrade-Project
 
     # check project target
     $targetFrameworkIdentifier = $csproj.GetProperty('TargetFrameworkIdentifier')
-    if ($targetFrameworkIdentifier -and $targetFrameworkIdentifier.EvaluatedValue -ne '.NETFramework')
+    $incompatibleProperty1 = $csproj.GetProperty('CustomAfterMicrosoftCompactFrameworkCommonTargets')
+    $incompatibleProperty2 = $csproj.GetProperty('CreateSilverlightAppManifestDependsOn')
+    if (($targetFrameworkIdentifier -and $targetFrameworkIdentifier.EvaluatedValue -ne '.NETFramework') -or $incompatibleProperty1 -or $incompatibleProperty2 )
     {
         Write-Warning "Project doesn't target .NET Framework. Skipping the project."
         return
@@ -118,7 +120,7 @@ function Upgrade-Project
         Write-Warning "Project contains unsupported toolkit reference(s):"
         $toolkitReference | ForEach-Object { Write-Warning $_.Include }
         Write-Warning "Skipping the project."
-        Write-Host ''
+        Write-Host '' 
         return
     }
 
