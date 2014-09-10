@@ -26,6 +26,23 @@ param(
     [bool]$backup = $false
 )
 
+# Check PowerShell version
+if ( $PSVersionTable.PSVersion.Major -lt 3 )
+{
+    Write-Error "This script requires PowerShell 3.0"
+    return
+}
+
+if ( $PSVersionTable.CLRVersion.Major -lt 4 )
+{
+    Write-Error "This script requires CLR v4.0"
+    return
+}
+
+
+
+# Check for presence of NuGet.exe
+
 $nugetExe = Join-Path $(Split-Path -parent $MyInvocation.MyCommand.Definition) "nuget.exe"
 
 if (!(Test-Path $nugetExe))
