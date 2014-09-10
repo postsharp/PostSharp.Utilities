@@ -26,10 +26,16 @@ param(
     [bool]$backup = $false
 )
 
-if (!(Test-Path .\NuGet.exe))
+$nugetExe = Join-Path $(Split-Path -parent $MyInvocation.MyCommand.Definition) "nuget.exe"
+
+if (!(Test-Path $nugetExe))
 {
     Write-Error "NuGet.exe file not found. Run the script from directory that contains Nuget.exe"
     return
+}
+else
+{
+    Write-Host "NuGet.exe found at $nugetExe"
 }
 
 Add-Type -AssemblyName 'Microsoft.Build, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'
@@ -53,14 +59,23 @@ function Get-PostSharpReference($csproj)
 
 function Get-RepositoryPath($path)
 {
-    $repositoryPath = .\NuGet.exe config repositorypath
+    Push-Location $path
+
+    $repositoryPath = & $nugetExe config repositorypath
+
     if ($repositoryPath -like 'WARNING*')
     {
         Write-Warning 'repositorypath nuget setting is not set, using solution path as root for repository path'
         $repositoryPath = Join-Path $path 'packages'
     }
+    else
+    {
+        $repositoryPath = Join-Path $path $repositoryPath
+    }
 
     Write-Host "Using $repositorypath as repositorypath"
+
+    Pop-Location
 
     return $repositoryPath
 }
@@ -183,7 +198,7 @@ function Upgrade-Project
     # backup original file
     if ($backup)
     {
-        Copy-Item $projectFullName ($projectFullName + ".bak")
+        Copy-Item $projectFullName ($projectFullName + ".bak") 
     }
 
     # save the project file
@@ -261,9 +276,10 @@ function Upgrade-Directory
         $nugetPackage = 'PostSharp.' + $postSharpVersion
 
         # Install nuget package    
-        $nugetOutput = .\NuGet.exe install 'PostSharp' -Version $postSharpVersion -OutputDirectory $repositoryPath
+        $nugetOutput = & $nugetExe install 'PostSharp' -Version $postSharpVersion -OutputDirectory $repositoryPath
         if (!($nugetOutput -like 'Successfully*') -and !($nugetOutput -like '*already installed.'))
         {
+            Write-Error $nugetOutput
             Write-Warning 'PostSharp NuGet package not installed successfully. Terminating script.'
             return
         }
