@@ -55,7 +55,7 @@ else
     Write-Host "NuGet.exe found at $nugetExe"
 }
 
-Add-Type -AssemblyName 'Microsoft.Build, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'
+Add-Type -AssemblyName 'Microsoft.Build, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a' -ErrorAction Stop
 
 function Get-RelativePath($basePath, $targetPath)
 {
@@ -69,8 +69,24 @@ function Get-RelativePath($basePath, $targetPath)
     return $relativePath
 }
 
-function Get-PostSharpReference($csproj)
+function Has-PostSharpReference([Microsoft.Build.Evaluation.Project] $csproj)
 {
+   $projectInstance = $csproj.CreateProjectInstance()
+
+    if ( !$projectInstance.Build("ResolveAssemblyReferences", $null) )
+    {
+        throw "Cannot resolve assembly references"
+    }
+
+    return $projectInstance.Items | ` 
+        Where-Object   {  ( $_.ItemType -eq "ReferencePath" -or $_.ItemType -eq "ReferenceDependencyPaths") -and  `
+                          ( $_.Metadata["FusionName"].EvaluatedValue -match "PostSharp, Version=.*, Culture=neutral, PublicKeyToken=b13fd38b8f9c99d7" )   }
+
+}
+
+function Get-DirectPostSharpReferences([Microsoft.Build.Evaluation.Project] $csproj)
+{
+ 
     return @($csproj.Xml.ItemGroups.Children | Where-Object { $_.ItemType -like 'Reference' -and $_.Include.ToLowerInvariant().StartsWith("postsharp") })
 }
 
@@ -137,15 +153,23 @@ function Upgrade-Project
         return
     }
 
-    # check if there are some references to PostSharp
-    $postSharpReferences = Get-PostSharpReference $csproj
+    # ignore if we have SkipPostSharp
+    if ( $csproj.GetPropertyValue("SkipPostSharp") -eq "True" -or $csproj.GetPropertyValue("DefineConstants") -contains "SkipPostSharp" )
+    {
+         Write-Warning "SkipPostSharp detected. Skipping the project"
+         return
+    }
 
-    if (!$postSharpReferences -or $postSharpReferences.length -eq 0)
+    # check if there are some references to PostSharp
+    if ( !(Has-PostSharpReference( $csproj )) )
     {
         Write-Warning "No PostSharp reference. Skipping the project"
         return
     }
 
+    $postSharpReferences = Get-DirectPostSharpReferences $csproj
+
+    
     $toolkitReference = $postSharpReferences | Where-Object { $_.Include -like 'postsharp.toolkit*' }
     if ($toolkitReference -and $toolkitReference.lenght -ne 0)
     {
