@@ -13,8 +13,8 @@
 
     Limitations:
         - Only .NET Framework targets are supported.
-        - Projects referencing PostSharp toolkits are skipped.
-        - Script must be run from directory with nuget.exe.
+        - Projects referencing PostSharp Toolkits 2.1 and PostSharp Pattern Libraries are skipped.
+        - NuGet.exe should be in present in the same directory as the script.
 #>
 
 
@@ -23,7 +23,8 @@ param(
     [string]$path = $null,
     [string]$postSharpVersion = $null,
     [string]$outputProjectFileNameSuffix = '',
-    [bool]$backup = $false
+    [bool]$backup = $false,
+    [string] $checkout = 'tf checkout "{0}"'
 )
 
 # Check PowerShell version
@@ -50,12 +51,20 @@ if (!(Test-Path $nugetExe))
     Write-Error "NuGet.exe file not found. Run the script from directory that contains Nuget.exe"
     return
 }
-else
-{
-    Write-Host "NuGet.exe found at $nugetExe"
-}
 
 Add-Type -AssemblyName 'Microsoft.Build, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a' -ErrorAction Stop
+
+
+function Checkout-File($file)
+{
+    $status = Get-ChildItem $file
+    if ( $status.IsReadOnly )
+    {
+        Write-Warning "Checking out file $file"
+        $checkoutCommandLine = $checkout -f $file
+        & cmd /c $checkoutCommandLine
+    }
+}
 
 function Get-RelativePath($basePath, $targetPath)
 {
@@ -113,11 +122,98 @@ function Get-RepositoryPath($path)
     return $repositoryPath
 }
 
+function Add-Reference
+{
+    param(
+        [Microsoft.Build.Evaluation.Project] $csproj,
+        [string] $packagePath,
+        [string] $libraryPath
+     )
+
+
+    $projectDirectory = Split-Path $csproj.FullPath
+    $relativePackagePath = Get-RelativePath $projectDirectory $packagePath
+    $relativeAssemblyPath = Join-Path $relativePackagePath $libraryPath
+    $absoluteAssemblyPath = Join-Path $packagePath $libraryPath
+
+    if ( -not (Test-Path $absoluteAssemblyPath ) )
+    {
+        Write-Error "File $absoluteAssemblyPath does not exist."
+        Quit
+    }
+
+    
+
+    $assembly = [System.Reflection.AssemblyName]::GetAssemblyName($absoluteAssemblyPath)
+    $include = $assembly.FullName
+    if ($assembly.ProcessorArchitecture)
+    {
+        $include += ", processorArchitecture=" + $assembly.ProcessorArchitecture
+    }
+
+
+    $reference = $csproj.Xml.CreateItemElement("Reference")
+    $reference.Include = $include
+    $referenceGroup.AppendChild($reference)
+
+    $reference.AppendChild($csproj.Xml.CreateMetadataElement("Private", "True"))
+    $reference.AppendChild($csproj.Xml.CreateMetadataElement("HintPath", $relativeAssemblyPath))
+}
+
+function Download-Package
+{
+    param(
+        [string] $repositoryPath,
+        [string] $packageName,
+        [string] $packageVersion
+        )
+
+    $nugetPackage = $packageName + '.' + $postSharpVersion
+    $postSharpNugetPath = Join-Path $repositoryPath $nugetPackage
+
+    if ( -not (Test-Path $postSharpNugetPath ) )
+    {
+        Write-Host "Downloading $packageName $packageVersion ..."
+    
+        # Install nuget package    
+        $nugetOutput = & $nugetExe install $packageName -Version $postSharpVersion -OutputDirectory $repositoryPath
+        if (!($nugetOutput -like 'Successfully*') -and !($nugetOutput -like '*already installed.'))
+        {
+            Write-Error $nugetOutput
+            Write-Warning "$nugetPackage NuGet package not installed successfully. Terminating script."
+            return
+        }
+        Write-Host $nugetOutput
+    
+    }
+
+    return $postSharpNugetPath
+    
+}
+
+function Backup-File
+{
+    param ( [string] $path )
+
+
+    if ($backup)
+    {
+        $i = 0
+
+        # Find a unique number.
+        do { $i++}
+        while ( Test-Path "$path.bak.$i" )
+
+        Copy-Item $projectFullName "$path.bak.$i"
+    }
+
+}
+
 function Upgrade-Project
 {
     param(
         [string]$projectFullName,
-        [string]$packagePath,
+        [string]$repositoryPath,
         [string]$outputProjectFullName = $null,
         [bool]$backup = $false,
         [string]$version
@@ -180,14 +276,14 @@ function Upgrade-Project
         return
     }
 
+    $packagePath = Download-Package -repositoryPath $repositoryPath -packageName 'PostSharp' -packageVersion $version
+
     $referenceGroup = $postSharpReferences[0].Parent
 
     $projectPath = Split-Path $projectFullName
     $relativePackagePath = Get-RelativePath $projectPath $packagePath
     $relativePostSharpTargetsPath = Join-Path $relativePackagePath 'tools\PostSharp.targets'
-    $relativeAssemblyPath = Join-Path $relativePackagePath 'lib\net20\PostSharp.dll'
-    $absoluteAssemblyPath = Join-Path $packagePath 'lib\net20\PostSharp.dll'
-
+    
     # Remove elements from previous installations or versions.
     $nodesToRemove = @()
     $nodesToRemove += $csproj.Xml.Properties | Where-Object {$_.Name.ToLowerInvariant() -eq "dontimportpostsharp" }
@@ -221,28 +317,32 @@ function Upgrade-Project
     $errorTask.Condition = "Exists('$relativePostSharpTargetsPath')"
     $errorTask.SetParameter("Text", "The build restored NuGet packages. Build the project again to include these packages in the build. For more information, see http://www.postsharp.net/links/nuget-restore.");
 
-    # get full name of PostSharp assemlby
-    $assembly = [System.Reflection.AssemblyName]::GetAssemblyName($absoluteAssemblyPath)
-    $include = $assembly.FullName
-    if ($assembly.ProcessorArchitecture)
+    # add reference to PostSharp.dll
+    if ( $version -like "4.*" )
     {
-        $include += ", processorArchitecture=" + $assembly.ProcessorArchitecture
+        $libSubdir = "net35-client"
+    }
+    else
+    {
+        $libSubdir = "net20"
     }
 
-    $reference = $csproj.Xml.CreateItemElement("Reference")
-    $reference.Include = $include
-    $referenceGroup.AppendChild($reference)
+    Add-Reference  $csproj $packagePath "lib\$libSubdir\PostSharp.dll"
 
-    $reference.AppendChild($csproj.Xml.CreateMetadataElement("Private", "True"))
-    $reference.AppendChild($csproj.Xml.CreateMetadataElement("HintPath", $relativeAssemblyPath))
+    # install PostSharp.Settings.dll if we must
+    $postsharpSettingsReference = $postSharpReferences | Where-Object { $_.Include -like 'postsharp.settings*' }
+    if ($postsharpSettingsReference -and $postsharpSettingsReference.lenght -ne 0)
+    {
+        $postsharpSettingsPackagePath = Download-Package -repositoryPath $repositoryPath -packageName 'PostSharp.Settings' -packageVersion $version
+        Add-Reference  $csproj $postsharpSettingsPackagePath 'lib\net40\PostSharp.Settings.dll'
+    }
+
 
     # backup original file
-    if ($backup)
-    {
-        Copy-Item $projectFullName ($projectFullName + ".bak") 
-    }
+    Backup-File $projectFullName
 
     # save the project file
+    Checkout-File $outputProjectFullName
     $csproj.Save($outputProjectFullName)
 
     Upgrade-Packages -projectFullName $projectFullName -version $version -outpuSuffix $outputProjectFileNameSuffix
@@ -264,11 +364,7 @@ function Upgrade-Packages
     {
         $xml = [xml](Get-Content $packageFullName)
 
-        # backup original file
-        if ($backup)
-        {
-            Copy-Item $packageFullName ($packageFullName + ".bak")
-        }
+        Backup-File $packageFullName
     }
     else
     {
@@ -294,12 +390,7 @@ function Upgrade-Packages
         $packageElement.SetAttribute("version", $version)
     }
 
-    
-
-    
-
-   
-
+    Checkout-File $outputFullName
     $xml.Save($outputFullName)
 }
 
@@ -311,39 +402,28 @@ function Upgrade-Directory
         [string]$outputProjectFileNameSuffix = '',
         [bool]$backup = $true
     )
-    try
-    {
-        $repositoryPath = Get-RepositoryPath $rootPath
-        $nugetPackage = 'PostSharp.' + $postSharpVersion
-
-        # Install nuget package    
-        $nugetOutput = & $nugetExe install 'PostSharp' -Version $postSharpVersion -OutputDirectory $repositoryPath
-        if (!($nugetOutput -like 'Successfully*') -and !($nugetOutput -like '*already installed.'))
-        {
-            Write-Error $nugetOutput
-            Write-Warning 'PostSharp NuGet package not installed successfully. Terminating script.'
-            return
-        }
-        Write-Host $nugetOutput
+    $repositoryPath = Get-RepositoryPath $rootPath
     
-        # Update projects
-        $postSharpNugetPath = Join-Path $repositoryPath $nugetPackage
+    Write-Host ''
+    Write-Host 'Updating projects'
 
-        Write-Host ''
-        Write-Host 'Updating projects'
-
-        Get-ChildItem $rootPath -Recurse |
-            Where-Object { ($_.Name -like '*.csproj') -or ($_.Name -like '*.vbproj') } |
-            ForEach-Object {
-                Upgrade-Project -projectFullName $_.FullName -packagePath $postSharpNugetPath -outputProjectFullName ($_.FullName + $outputProjectFileNameSuffix) -backup $backup -version $postSharpVersion
-                Write-Host ''
+    Get-ChildItem $rootPath -Recurse |
+        Where-Object { ($_.Name -like '*.csproj') -or ($_.Name -like '*.vbproj') } |
+        ForEach-Object {
+            $project = $_
+            try
+            {
+                Upgrade-Project -projectFullName $project.FullName -repositoryPath $repositoryPath -outputProjectFullName ($_.FullName + $outputProjectFileNameSuffix) -backup $backup -version $postSharpVersion
             }
-    }
-    catch [Exception]
-    {
-        Write-Warning 'Unhandled exception thrown. Terminating batch upgrade.'
-        throw
-    }
+            catch [Exception]
+            {
+                Write-Error ("Exception while processing " + $project.FullName)
+                Write-Error $Error[0].Exception.ToString()
+            }
+
+            Write-Host ''
+        }
+    
 }
 
 if ($path -and $postSharpVersion)
