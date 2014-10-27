@@ -151,6 +151,7 @@ function Add-Reference
         $include += ", processorArchitecture=" + $assembly.ProcessorArchitecture
     }
 
+    # Add reference to project file.
 
     $reference = $csproj.Xml.CreateItemElement("Reference")
     $reference.Include = $include
@@ -158,19 +159,24 @@ function Add-Reference
 
     $reference.AppendChild($csproj.Xml.CreateMetadataElement("Private", "True"))
     $reference.AppendChild($csproj.Xml.CreateMetadataElement("HintPath", $relativeAssemblyPath))
+
+
+
 }
 
-function Download-Package
+function Install-Package
 {
     param(
         [string] $repositoryPath,
         [string] $packageName,
-        [string] $packageVersion
+        [string] $packageVersion,
+        [xml] $packagesConfig
         )
 
     $nugetPackage = $packageName + '.' + $postSharpVersion
     $postSharpNugetPath = Join-Path $repositoryPath $nugetPackage
 
+    # Download the package if necessary.
     if ( -not (Test-Path $postSharpNugetPath ) )
     {
         Write-Host "Downloading $packageName $packageVersion ..."
@@ -186,6 +192,24 @@ function Download-Package
         Write-Host $nugetOutput
     
     }
+
+    # Add to packages.config.
+    $packageElement = $packagesConfig.packages.ChildNodes | Where-Object { $_.Name -eq 'package' -and $_.id -eq $packageName }[0]
+    if (!$packageElement)
+    {
+        Write-Host "Installing NuGet package version $version"
+        $packageElement = $xml.CreateElement("package")
+        $packageElement.SetAttribute("id", $packageName)
+        $packageElement.SetAttribute("version", $packageVersion)
+        $packageElement.SetAttribute("targetFramework", "net20")
+        $packagesConfig.DocumentElement.AppendChild($packageElement) | Out-Null
+    }
+    else
+    {
+        Write-Host "Updating current NuGet package version from" $packageElement.version "to $packageVersion"
+        $packageElement.SetAttribute("version", $packageVersion)
+    }
+
 
     return $postSharpNugetPath
     
@@ -276,7 +300,14 @@ function Upgrade-Project
         return
     }
 
-    $packagePath = Download-Package -repositoryPath $repositoryPath -packageName 'PostSharp' -packageVersion $version
+
+    # Open packages.config
+    $projectPath = Split-Path $projectFullName
+    $packagesConfigPath = Join-Path $projectPath 'packages.config'
+
+
+    $packagesConfig = Open-PackagesConfig -packageFullName $packagesConfigPath
+    $packagePath = Install-Package -repositoryPath $repositoryPath -packageName 'PostSharp' -packageVersion $version -packagesConfig $packagesConfig
 
     $referenceGroup = $postSharpReferences[0].Parent
 
@@ -292,7 +323,19 @@ function Upgrade-Project
     $nodesToRemove += $postSharpReferences
 
     $postSharpReferences | ForEach-Object { Write-Host "Removing reference" $_.Include }
-    $nodesToRemove | ForEach-Object { $_.Parent.RemoveChild($_) | out-null }
+    $nodesToRemove | ForEach-Object         {
+          $nodeToRemove = $_
+          $parent = $nodeToRemove.Parent
+          $parent.RemoveChild($nodeToRemove) | out-null 
+
+          # Remove the group if it becomes empty.
+          if ( $parent.Count -eq 0 )
+          {
+            $parent.Parent.RemoveChild( $parent )
+          }
+          
+
+        }
 
     # Set property DontImportPostSharp to prevent locally-installed previous versions of PostSharp to interfere.
     $csproj.Xml.AddProperty( "DontImportPostSharp", "True" ) | Out-Null
@@ -317,6 +360,8 @@ function Upgrade-Project
     $errorTask.Condition = "Exists('$relativePostSharpTargetsPath')"
     $errorTask.SetParameter("Text", "The build restored NuGet packages. Build the project again to include these packages in the build. For more information, see http://www.postsharp.net/links/nuget-restore.");
 
+
+  
     # add reference to PostSharp.dll
     if ( $version -like "4.*" )
     {
@@ -333,7 +378,7 @@ function Upgrade-Project
     $postsharpSettingsReference = $postSharpReferences | Where-Object { $_.Include -like 'postsharp.settings*' }
     if ($postsharpSettingsReference -and $postsharpSettingsReference.lenght -ne 0)
     {
-        $postsharpSettingsPackagePath = Download-Package -repositoryPath $repositoryPath -packageName 'PostSharp.Settings' -packageVersion $version
+        $postsharpSettingsPackagePath = Install-Package -repositoryPath $repositoryPath -packageName 'PostSharp.Settings' -packageVersion $version -packagesConfig $packagesConfig
         Add-Reference  $csproj $postsharpSettingsPackagePath 'lib\net40\PostSharp.Settings.dll'
     }
 
@@ -345,21 +390,17 @@ function Upgrade-Project
     Checkout-File $outputProjectFullName
     $csproj.Save($outputProjectFullName)
 
-    Upgrade-Packages -projectFullName $projectFullName -version $version -outpuSuffix $outputProjectFileNameSuffix
+    $packagesConfig.Save($packagesConfigPath)
+
 }
 
-function Upgrade-Packages
+function Open-PackagesConfig
 {
     param(
-        [string]$projectFullName,
-        [string]$version,
-        [string]$outpuSuffix = ''
+        [string]$packageFullName
     )
 
-    $projectPath = Split-Path $projectFullName
-    $packageFullName = Join-Path $projectPath 'packages.config'
-    $outputFullName = $packageFullName + $outputSuffix
-
+   
     if (Test-Path $packageFullName)
     {
         $xml = [xml](Get-Content $packageFullName)
@@ -372,26 +413,8 @@ function Upgrade-Packages
         $xml = [xml]"<packages></packages>"
     }
 
-    
 
-    $packageElement = $xml.packages.ChildNodes | Where-Object { $_.Name -like 'package' -and $_.id -like 'PostSharp' }[0]
-    if (!$packageElement)
-    {
-        Write-Host "Installing NuGet package version $version"
-        $packageElement = $xml.CreateElement("package")
-        $packageElement.SetAttribute("id", "PostSharp")
-        $packageElement.SetAttribute("version", $version)
-        $packageElement.SetAttribute("targetFramework", "net20")
-        $xml.DocumentElement.AppendChild($packageElement) | Out-Null
-    }
-    else
-    {
-        Write-Host "Updating current NuGet package version from" $packageElement.version "to $version"
-        $packageElement.SetAttribute("version", $version)
-    }
-
-    Checkout-File $outputFullName
-    $xml.Save($outputFullName)
+    return $xml    
 }
 
 function Upgrade-Directory
